@@ -1,0 +1,22 @@
+[
+    {"q": "clear the cache", "match": ["clearCache"]},
+    {"q": "check if the manager user has a permission", "match": ["hasPermission"]},
+    {"q": "fire a plugin event", "match": ["invokeEvent"]},
+    {"q": "run a snippet by name from code", "match": ["runSnippet"]},
+    {"q": "get the values of a template variable for a document", "match": ["getTemplateVar"]},
+    {"q": "render a chunk with placeholders", "match": ["parseChunk"]},
+    {"q": "build the url of a document", "match": ["makeUrl"]},
+    {"q": "get all parent ids of a resource", "match": ["getParentIds"]},
+    {"q": "get the child documents of a page", "match": ["getChildIds", "getDocumentChildren"]},
+    {"q": "redirect the visitor to another page", "match": ["sendRedirect"]},
+    {"q": "write an entry to the event log", "match": ["logEvent"]},
+    {"q": "evaluate snippet code", "match": ["evalSnippet"]},
+    {"q": "id of the logged in manager user", "match": ["getLoginUserID"]},
+    {"q": "send an email from a plugin", "match": ["sendmail"]},
+    {"q": "information about a page by id", "match": ["getPageInfo"]},
+    {"q": "register a javascript file in the page head", "match": ["regClientScript"]},
+    {"q": "read the site settings", "match": ["getSettings", "getConfig"]},
+    {"q": "attach a listener to a system event", "match": ["addEventListener"]},
+    {"q": "user information", "match": ["getUserInfo"]},
+    {"q": "find the id of a snippet by its name", "match": ["getSnippetId"]}
+]

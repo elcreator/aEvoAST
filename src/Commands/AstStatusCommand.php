@@ -4,24 +4,26 @@ namespace Elcreator\aEvoAST\Commands;
 
 use Illuminate\Console\Command;
 use Elcreator\aEvoAST\Parsers\SourceDiscovery;
-use Elcreator\aEvoAST\Embeddings\OllamaEmbedder;
+use Elcreator\aEvoAST\Embeddings\Embedder;
+use Elcreator\aEvoAST\Storage\IndexMeta;
 
 class AstStatusCommand extends Command
 {
     protected $signature = 'ast:status';
     protected $description = 'Show status of AST sources, cache, and Ollama';
 
-    public function handle(SourceDiscovery $discovery, OllamaEmbedder $embedder): int
+    public function handle(SourceDiscovery $discovery, Embedder $embedder): int
     {
         $cachePath = config('aevoast.cache_path');
         $outputPath = base_path(config('aevoast.output.path', '.ast'));
-        $format = config('aevoast.output.format', 'json');
+        $format = config('aevoast.output.format', 'bin');
+        $symbolFormat = $format === 'csv' ? 'csv' : 'json';
 
         // Ollama status
-        $this->info('Ollama');
-        $this->line("  URL:   " . config('aevoast.ollama.url'));
-        $this->line("  Model: " . $embedder->getModel());
-        $this->line("  Status: " . ($embedder->isAvailable() ? '<info>✓ available</info>' : '<error>✗ not reachable</error>'));
+        $this->info('Embedder');
+        $this->line("  Driver: " . $embedder->getDriver() . ($embedder->isRemote() ? ' (remote)' : ' (local)'));
+        $this->line("  Model:  " . $embedder->getModel());
+        $this->line("  Status: " . ($embedder->isAvailable() ? '<info>✓ available</info>' : '<error>✗ not available</error>'));
         $this->newLine();
 
         // Discovered sources
@@ -37,7 +39,7 @@ class AstStatusCommand extends Command
                 $versionSuffix = $s['version'] ? '_' . $s['version'] : '';
                 $cacheKey = "{$safeName}{$versionSuffix}";
 
-                $hasSym = file_exists("{$cachePath}/{$cacheKey}.symbols.{$format}");
+                $hasSym = file_exists("{$cachePath}/{$cacheKey}.symbols.{$symbolFormat}");
                 $hasEmb = file_exists("{$cachePath}/{$cacheKey}.embeddings.{$format}");
 
                 $rows[] = [
@@ -59,7 +61,7 @@ class AstStatusCommand extends Command
         $this->newLine();
         $this->info('Merged Index');
 
-        $mergedSym = "{$outputPath}/merged.symbols.{$format}";
+        $mergedSym = "{$outputPath}/merged.symbols.{$symbolFormat}";
         $mergedEmb = "{$outputPath}/merged.embeddings.{$format}";
 
         $this->line("  Symbols:    " . (file_exists($mergedSym)
@@ -69,6 +71,10 @@ class AstStatusCommand extends Command
         $this->line("  Embeddings: " . (file_exists($mergedEmb)
             ? '<info>✓</info> ' . $this->fileSize($mergedEmb)
             : '<comment>not generated</comment>'));
+
+        if (file_exists($mergedEmb)) {
+            $this->line('  Model:      ' . IndexMeta::label(IndexMeta::read($mergedEmb)));
+        }
 
         // Cache dir size
         $this->newLine();

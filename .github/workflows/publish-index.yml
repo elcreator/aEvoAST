@@ -1,0 +1,138 @@
+name: Publish index
+
+# Builds the ready-made index of Evolution CMS (and its documentation) and publishes it as a
+# GitHub release called index-<version>, which `php artisan ast:pull` downloads.
+#
+# Runs:
+#   - every day, and does nothing unless Evolution CMS has a release we have no index for;
+#   - by hand (Actions > Publish index > Run workflow), for a given version or to rebuild one;
+#   - when told so by the Evolution CMS repository (repository_dispatch, event type
+#     "evolution-release", client_payload.ref = "3.5.9"): add one step to its release workflow:
+#         gh api repos/elcreator/aEvoAST/dispatches -f event_type=evolution-release -f "client_payload[ref]=$TAG"
+#     with a token that may write to this repository.
+#
+# The embeddings are made on a CPU with Ollama and bge-m3: expect a long run (the job below is
+# allowed five hours). Nothing here has run yet; the first manual run is the test.
+
+on:
+  workflow_dispatch:
+    inputs:
+      evolution_ref:
+        description: 'Evolution CMS version, e.g. 3.5.9 (default: its latest release)'
+        required: false
+      langs:
+        description: 'Documentation languages to include'
+        required: false
+        default: 'en'
+      rebuild:
+        description: 'Replace the release if it already exists'
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [evolution-release]
+  schedule:
+    - cron: '17 4 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-index
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUESTED_REF: ${{ inputs.evolution_ref || github.event.client_payload.ref }}
+      LANGS: ${{ inputs.langs || 'en' }}
+      REBUILD: ${{ inputs.rebuild || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide what to build
+        id: plan
+        run: |
+          set -euo pipefail
+          ref="${REQUESTED_REF:-}"
+          if [ -z "$ref" ]; then
+            ref="$(gh api repos/evolution-cms/evolution/releases/latest --jq .tag_name)"
+          fi
+          # a version number and nothing else: it ends up in a tag, a path and a command line
+          if ! printf '%s' "$ref" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+            echo "Not a version number: $ref" >&2; exit 1
+          fi
+          if ! printf '%s' "$LANGS" | grep -Eq '^[a-z]{2,3}(,[a-z]{2,3})*$'; then
+            echo "Bad language list: $LANGS" >&2; exit 1
+          fi
+          tag="index-$ref"
+          if gh release view "$tag" >/dev/null 2>&1 && [ "$REBUILD" != "true" ]; then
+            echo "$tag already exists, nothing to do"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Evolution CMS
+        if: steps.plan.outputs.build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: evolution-cms/evolution
+          ref: ${{ steps.plan.outputs.ref }}
+          path: evolution
+
+      - name: Fetch the documentation
+        if: steps.plan.outputs.build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: evolution-cms/docs
+          path: docs
+
+      - name: PHP
+        if: steps.plan.outputs.build == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, zlib
+          tools: composer
+
+      - name: Install dependencies
+        if: steps.plan.outputs.build == 'true'
+        run: composer install --no-dev --prefer-dist --no-interaction
+
+      - name: Ollama with bge-m3
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > ollama.log 2>&1 &)
+          for i in $(seq 1 60); do
+            curl -fs http://localhost:11434/api/tags >/dev/null && break
+            sleep 2
+          done
+          ollama pull bge-m3
+
+      - name: Build the index
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          php bin/build-release.php --evolution=evolution --docs=docs --langs="$LANGS" --out=dist
+          ls -l dist
+
+      - name: Publish the release
+        if: steps.plan.outputs.build == 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          REF: ${{ steps.plan.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --cleanup-tag --yes
+          fi
+          gh release create "$TAG" dist/* \
+            --title "Index for Evolution CMS $REF" \
+            --notes "Ready-made aEvoAST index of Evolution CMS $REF and its documentation (model: bge-m3). Download with \`php artisan ast:pull\`; \`manifest.json\` lists the files and their checksums."

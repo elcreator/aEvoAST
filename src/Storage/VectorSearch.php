@@ -66,7 +66,7 @@ class VectorSearch
      * Both vectors are assumed to be L2-normalized (Ollama /api/embed does this),
      * so cosine similarity = dot product.
      */
-    private function cosineSimilarity(array $a, array $b): float
+    public function cosineSimilarity(array $a, array $b): float
     {
         $dot = 0.0;
         $normA = 0.0;

@@ -66,6 +66,7 @@ class SymbolExtractorVisitor extends NodeVisitorAbstract
             'namespace'  => $this->currentNamespace,
             'name'       => $node->name?->toString() ?? '(anonymous)',
             'fqcn'       => $this->fqcn($node->name?->toString()),
+            'summary'    => $this->summary($node),
             'extends'    => null,
             'implements' => [],
             'constants'  => [],
@@ -121,6 +122,7 @@ class SymbolExtractorVisitor extends NodeVisitorAbstract
     {
         return [
             'name'        => $node->name->toString(),
+            'summary'     => $this->summary($node),
             'visibility'  => $this->methodVisibility($node),
             'static'      => $node->isStatic(),
             'abstract'    => $node->isAbstract(),
@@ -138,11 +140,50 @@ class SymbolExtractorVisitor extends NodeVisitorAbstract
             'namespace'   => $this->currentNamespace,
             'name'        => $node->name->toString(),
             'fqcn'        => $this->fqcn($node->name->toString()),
+            'summary'     => $this->summary($node),
             'return_type' => $this->typeToString($node->returnType),
             'params'      => $this->extractParams($node->params),
             'line_start'  => $node->getStartLine(),
             'line_end'    => $node->getEndLine(),
         ];
+    }
+
+    /**
+     * First sentence of the docblock: what the symbol is for, in the author's words.
+     * Tags (@param, @return ...) and everything after the first blank line are left out.
+     */
+    private function summary(Node $node): ?string
+    {
+        $doc = $node->getDocComment();
+        if ($doc === null) {
+            return null;
+        }
+
+        $lines = [];
+        foreach (preg_split('/\R/', $doc->getText()) as $line) {
+            $line = trim(preg_replace('#^\s*(/\*\*+|\*+/|\*)#', '', $line));
+            $line = trim(preg_replace('#\*+/\s*$#', '', $line));
+            if (str_starts_with($line, '@')) {
+                break;
+            }
+            if ($line === '') {
+                if ($lines) {
+                    break;
+                }
+                continue;
+            }
+            $lines[] = $line;
+        }
+
+        $text = trim(implode(' ', $lines));
+        if ($text === '') {
+            return null;
+        }
+        if (preg_match('/^(.+?[.!?])(\s|$)/', $text, $m)) {
+            $text = $m[1];
+        }
+
+        return mb_strlen($text) > 200 ? mb_substr($text, 0, 197) . '...' : $text;
     }
 
     /**

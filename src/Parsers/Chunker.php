@@ -43,7 +43,7 @@ class Chunker
 
     private function chunkFunction(array $symbol): array
     {
-        $sig = $this->functionSignature($symbol);
+        $sig = $this->withSummary($this->functionSignature($symbol), $symbol['summary'] ?? null);
         $id = $this->makeId($symbol, null);
 
         return [
@@ -64,7 +64,7 @@ class Chunker
 
     private function chunkClassHeader(array $symbol): array
     {
-        $sig = $this->classHeaderSignature($symbol);
+        $sig = $this->withSummary($this->classHeaderSignature($symbol), $symbol['summary'] ?? null);
         $id = $this->makeId($symbol, null);
 
         return [
@@ -93,6 +93,7 @@ class Chunker
                 ($method['static'] ? ' static' : '') .
                 ($method['abstract'] ? ' abstract' : '') .
                 ']';
+        $text = $this->withSummary($text, $method['summary'] ?? null);
 
         $id = $this->makeId($classSymbol, $method['name']);
 
@@ -150,6 +151,12 @@ class Chunker
                 'line_end'   => $symbol['line_end'] ?? 0,
             ],
         ];
+    }
+
+    /** "signature - what it does": the words an author uses to describe it are the words a query uses. */
+    private function withSummary(string $signature, ?string $summary): string
+    {
+        return $summary ? $signature . ' - ' . $summary : $signature;
     }
 
     private function classHeaderSignature(array $symbol): string

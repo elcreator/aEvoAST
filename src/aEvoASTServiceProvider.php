@@ -4,10 +4,12 @@ namespace Elcreator\aEvoAST;
 
 use Illuminate\Support\ServiceProvider;
 use Elcreator\aEvoAST\Commands\AstParseCommand;
+use Elcreator\aEvoAST\Commands\AstPullCommand;
 use Elcreator\aEvoAST\Commands\AstMergeCommand;
 use Elcreator\aEvoAST\Commands\AstSearchCommand;
 use Elcreator\aEvoAST\Commands\AstStatusCommand;
-use Elcreator\aEvoAST\Embeddings\OllamaEmbedder;
+use Elcreator\aEvoAST\Embeddings\Embedder;
+use Elcreator\aEvoAST\Embeddings\EmbedderFactory;
 use Elcreator\aEvoAST\Parsers\SymbolMapParser;
 
 class aEvoASTServiceProvider extends ServiceProvider
@@ -17,6 +19,7 @@ class aEvoASTServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 AstParseCommand::class,
+                AstPullCommand::class,
                 AstMergeCommand::class,
                 AstSearchCommand::class,
                 AstStatusCommand::class,
@@ -36,9 +39,8 @@ class aEvoASTServiceProvider extends ServiceProvider
             return new SymbolMapParser();
         });
 
-        $this->app->singleton(OllamaEmbedder::class, function ($app) {
-            $config = $app['config']['aevoast.ollama'];
-            return new OllamaEmbedder($config['url'], $config['model']);
+        $this->app->singleton(Embedder::class, function ($app) {
+            return EmbedderFactory::make($app['config']['aevoast']);
         });
     }
 }

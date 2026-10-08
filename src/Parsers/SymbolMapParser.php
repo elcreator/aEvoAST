@@ -11,6 +11,8 @@ use SplFileInfo;
 
 class SymbolMapParser
 {
+    private const SKIP_DIRS = ['vendor', 'node_modules', '.git'];
+
     private Parser $parser;
     private SymbolExtractorVisitor $visitor;
     private NodeTraverser $traverser;
@@ -46,8 +48,13 @@ class SymbolMapParser
             return $result;
         }
 
+        // A nested vendor/ is somebody else's dependencies (Laravel alone is ~36k chunks,
+        // thirteen times Evo's own core): they are not part of this source.
         $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($path, RecursiveDirectoryIterator::SKIP_DOTS),
+            new \RecursiveCallbackFilterIterator(
+                new RecursiveDirectoryIterator($path, RecursiveDirectoryIterator::SKIP_DOTS),
+                fn(SplFileInfo $f) => !$f->isDir() || !in_array($f->getFilename(), self::SKIP_DIRS, true)
+            ),
             RecursiveIteratorIterator::LEAVES_ONLY
         );
 

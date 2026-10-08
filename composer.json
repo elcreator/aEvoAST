@@ -29,5 +29,16 @@
                 "Elcreator\\aEvoAST\\aEvoASTServiceProvider"
             ]
         }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Elcreator\\aEvoAST\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11"
     }
 }

@@ -22,13 +22,14 @@ class FileWriter
      *
      * @param array $chunks Each chunk has 'id', 'text', 'meta', 'embedding'
      */
-    public function writeEmbeddings(string $path, array $chunks, string $format = 'json'): void
+    public function writeEmbeddings(string $path, array $chunks, string $format = 'json', ?array $meta = null): void
     {
         $this->ensureDir(dirname($path));
 
         match ($format) {
             'csv'   => $this->writeEmbeddingsCsv($path, $chunks),
-            default => $this->writeJson($path, $chunks),
+            'bin'   => BinaryIndex::write($path, $chunks, $this->binaryMeta($meta)),
+            default => $this->writeJsonLines($path, $chunks),
         };
     }
 
@@ -47,8 +48,65 @@ class FileWriter
 
         return match ($ext) {
             'csv'   => $this->readEmbeddingsCsv($path),
-            default => $this->readJson($path),
+            'bin'   => iterator_to_array(BinaryIndex::iterate($path), false),
+            default => $this->readJsonLines($path),
         };
+    }
+
+    /** A binary index records its model in its own header, so it cannot be written without saying which. */
+    private function binaryMeta(?array $meta): array
+    {
+        if ($meta === null) {
+            throw new \InvalidArgumentException('A binary index needs its metadata (model, dimensions): pass IndexMeta::describe() or IndexMeta::lexicalOnly()');
+        }
+
+        return $meta;
+    }
+
+    /**
+     * Write chunks as they are produced; a merge of two real indexes does not fit in memory otherwise.
+     *
+     * @param iterable $chunks
+     */
+    public function writeEmbeddingsStream(string $path, iterable $chunks, string $format = 'json', ?array $meta = null): void
+    {
+        $this->ensureDir(dirname($path));
+
+        if ($format === 'bin') {
+            BinaryIndex::write($path, $chunks, $this->binaryMeta($meta));
+            return;
+        }
+
+        if ($format === 'csv') {
+            $this->writeEmbeddingsCsv($path, is_array($chunks) ? $chunks : iterator_to_array($chunks, false));
+            return;
+        }
+
+        $this->writeJsonLines($path, $chunks);
+    }
+
+    /**
+     * Read chunks one at a time. The CSV and older pretty-printed layouts are read whole.
+     *
+     * @return \Generator<int, array>
+     */
+    public function iterateEmbeddings(string $path): \Generator
+    {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        $ext = pathinfo($path, PATHINFO_EXTENSION);
+        if ($ext === 'csv') {
+            yield from $this->readEmbeddingsCsv($path);
+            return;
+        }
+        if ($ext === 'bin') {
+            yield from BinaryIndex::iterate($path);
+            return;
+        }
+
+        yield from $this->iterateJsonLines($path);
     }
 
     /**
@@ -78,6 +136,68 @@ class FileWriter
             $path,
             json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
         );
+    }
+
+    /**
+     * A JSON array with one element per line. Still one valid JSON document, but it is
+     * written and read a chunk at a time: pretty-printing the embeddings of Evo's own core
+     * (2.7k chunks x 768 floats) as one string ran out of PHP's default 128 MB.
+     */
+    private function writeJsonLines(string $path, iterable $items): void
+    {
+        $fp = fopen($path, 'w');
+        if ($fp === false) {
+            throw new \RuntimeException("Cannot open for writing: {$path}");
+        }
+
+        fwrite($fp, "[\n");
+        $first = true;
+        foreach ($items as $item) {
+            fwrite($fp, ($first ? '' : ",\n") . json_encode($item, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+            $first = false;
+        }
+        fwrite($fp, ($first ? '' : "\n") . "]\n");
+        fclose($fp);
+    }
+
+    /** Reads the line-per-chunk layout, or any other JSON document (older indexes were pretty-printed). */
+    private function readJsonLines(string $path): array
+    {
+        return iterator_to_array($this->iterateJsonLines($path), false);
+    }
+
+    private function iterateJsonLines(string $path): \Generator
+    {
+        $fp = fopen($path, 'r');
+        if ($fp === false) {
+            return;
+        }
+
+        $streamed = trim((string) fgets($fp)) === '[';
+        $count = 0;
+        while ($streamed && ($line = fgets($fp)) !== false) {
+            $line = rtrim($line, ",\r\n ");
+            if ($line === ']' || $line === '') {
+                continue;
+            }
+            $item = $line[0] === '{' ? json_decode($line, true) : null;
+            if (!is_array($item)) {
+                $streamed = false; // a pretty-printed document, not our layout
+                break;
+            }
+            $count++;
+            yield $item;
+        }
+        fclose($fp);
+
+        if (!$streamed) {
+            // Not one chunk per line: an older, pretty-printed index. Nothing was yielded yet
+            // unless the first line looked right, which a pretty-printed one never does.
+            if ($count > 0) {
+                throw new \RuntimeException("Unreadable embeddings file: {$path}");
+            }
+            yield from $this->readJson($path);
+        }
     }
 
     private function readJson(string $path): array

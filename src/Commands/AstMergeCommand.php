@@ -4,12 +4,13 @@ namespace Elcreator\aEvoAST\Commands;
 
 use Illuminate\Console\Command;
 use Elcreator\aEvoAST\Storage\FileWriter;
+use Elcreator\aEvoAST\Storage\IndexMeta;
 use Elcreator\aEvoAST\Storage\Merger;
 
 class AstMergeCommand extends Command
 {
     protected $signature = 'ast:merge
-        {--format=json : Output format: json or csv}
+        {--format= : Index format: bin (default), json or csv}
         {--output= : Custom output directory (default: project_root/.ast)}
         {--active-only : Write only active (non-overridden) chunks}';
 
@@ -17,7 +18,8 @@ class AstMergeCommand extends Command
 
     public function handle(): int
     {
-        $format = $this->option('format');
+        $format = $this->option('format') ?: config('aevoast.output.format', 'bin');
+        $symbolFormat = $format === 'csv' ? 'csv' : 'json'; // symbol maps carry no vectors: readable JSON even beside a binary index
         $cachePath = config('aevoast.cache_path');
         $outputPath = $this->option('output')
             ?? base_path(config('aevoast.output.path', '.ast'));
@@ -36,7 +38,7 @@ class AstMergeCommand extends Command
         $pattern = $cachePath . '/*.embeddings.' . $format;
         $files = glob($pattern);
 
-        $symbolPattern = $cachePath . '/*.symbols.' . $format;
+        $symbolPattern = $cachePath . '/*.symbols.' . $symbolFormat;
         $symbolFiles = glob($symbolPattern);
 
         if (empty($files) && empty($symbolFiles)) {
@@ -49,28 +51,49 @@ class AstMergeCommand extends Command
         if (!empty($files)) {
             $this->info('Merging embeddings from ' . count($files) . ' sources…');
 
-            $chunkSets = [];
+            // One index = one vector space. Refuse to mix models.
+            $spaces = [];
             foreach ($files as $file) {
-                $sourceName = basename($file, ".embeddings.{$format}");
-                $this->line("  Loading: {$sourceName}");
-                $chunkSets[] = $writer->readEmbeddings($file);
+                try {
+                    $spaces[$file] = IndexMeta::read($file);
+                } catch (\RuntimeException $e) {
+                    $this->error(basename($file) . ': ' . $e->getMessage());
+                    $this->info('Rebuild it with `php artisan ast:parse --force`, or fetch it again with `ast:pull`.');
+                    return 1;
+                }
+            }
+            $withVectors = array_values(array_filter($spaces, fn($m) => !IndexMeta::isLexicalOnly($m)));
+            $reference = $withVectors[0] ?? IndexMeta::lexicalOnly();
+            $mixed = array_filter($spaces, fn($m) => !IndexMeta::sameSpace($m, $reference));
+            if ($mixed) {
+                $this->error('Cached embeddings come from different models, they cannot be merged:');
+                foreach ($spaces as $file => $meta) {
+                    $this->line('  ' . basename($file) . '  ' . IndexMeta::label($meta));
+                }
+                $this->info('Re-run `php artisan ast:parse --force` with a single embedder.');
+                return 1;
             }
 
-            $merged = $merger->merge($chunkSets);
-
-            if ($activeOnly) {
-                $merged = $merger->active($merged);
+            foreach ($files as $file) {
+                $this->line('  Loading: ' . basename($file, ".embeddings.{$format}"));
             }
 
-            $overrideCount = count(array_filter(
-                $merged,
-                fn($c) => $c['meta']['overridden'] ?? false
-            ));
-
-            $activeCount = count($merged) - $overrideCount;
-
+            // Streamed: two real indexes (core + docs) are more than PHP's default memory holds as arrays.
             $embFile = "{$outputPath}/merged.embeddings.{$format}";
-            $writer->writeEmbeddings($embFile, $merged, $format);
+            $overrideCount = 0;
+            $total = 0;
+            $stream = (function () use ($merger, $files, $writer, $activeOnly, &$overrideCount, &$total) {
+                foreach ($merger->mergeFiles($files, $writer, $activeOnly, $overrideCount) as $chunk) {
+                    $total++;
+                    yield $chunk;
+                }
+            })();
+            $mergedMeta = array_diff_key($reference, ['legacy' => 1, 'source' => 1, 'layer' => 1, 'version' => 1, 'lang' => 1]);
+            $mergedMeta['created_at'] = gmdate('c');
+            $writer->writeEmbeddingsStream($embFile, $stream, $format, $mergedMeta);
+
+            $activeCount = $total - ($activeOnly ? 0 : $overrideCount);
+            IndexMeta::write($embFile, $mergedMeta);
 
             $this->info("✓ Merged embeddings → {$embFile}");
             $this->line("  {$activeCount} active chunks, {$overrideCount} overridden");
@@ -82,14 +105,14 @@ class AstMergeCommand extends Command
 
             $allSymbols = [];
             foreach ($symbolFiles as $file) {
-                $sourceName = basename($file, ".symbols.{$format}");
+                $sourceName = basename($file, ".symbols.{$symbolFormat}");
                 $this->line("  Loading: {$sourceName}");
                 $symbols = $writer->readSymbols($file);
                 $allSymbols = array_merge($allSymbols, $symbols);
             }
 
-            $symFile = "{$outputPath}/merged.symbols.{$format}";
-            $writer->writeSymbols($symFile, $allSymbols, $format);
+            $symFile = "{$outputPath}/merged.symbols.{$symbolFormat}";
+            $writer->writeSymbols($symFile, $allSymbols, $symbolFormat);
 
             $this->info("✓ Merged symbols → {$symFile}");
             $this->line("  " . count($allSymbols) . " total symbols");

@@ -74,6 +74,54 @@ class Merger
     }
 
     /**
+     * The same merge as merge(), file by file, in constant memory: one pass over the files
+     * to see which chunk wins each symbol, a second to yield every chunk with its flags.
+     * Output follows the input order instead of grouping a symbol's versions together.
+     *
+     * @param  string[]  $files
+     * @param  int|null  $overridden  set to the number of overridden chunks seen
+     * @return \Generator<int, array>
+     */
+    public function mergeFiles(array $files, FileWriter $reader, bool $activeOnly = false, ?int &$overridden = null): \Generator
+    {
+        $files = array_values($files);
+        $overridden = 0;
+
+        $best = [];
+        foreach ($files as $fi => $file) {
+            $n = 0;
+            foreach ($reader->iterateEmbeddings($file) as $chunk) {
+                $key = $this->semanticKey($chunk);
+                $priority = $this->layerPriority($chunk);
+                if (!isset($best[$key]) || $priority > $best[$key]['p']) {
+                    $best[$key] = ['p' => $priority, 'src' => $chunk['meta']['source'] ?? 'unknown', 'file' => $fi, 'n' => $n];
+                }
+                $n++;
+            }
+        }
+
+        foreach ($files as $fi => $file) {
+            $n = 0;
+            foreach ($reader->iterateEmbeddings($file) as $chunk) {
+                $winner = $best[$this->semanticKey($chunk)];
+                $wins = $winner['file'] === $fi && $winner['n'] === $n;
+                $n++;
+
+                if (!$wins) {
+                    $overridden++;
+                    if ($activeOnly) {
+                        continue;
+                    }
+                }
+                $chunk['meta']['overridden'] = !$wins;
+                $chunk['meta']['overridden_by'] = $wins ? null : $winner['src'];
+
+                yield $chunk;
+            }
+        }
+    }
+
+    /**
      * Get only active (non-overridden) chunks.
      */
     public function active(array $merged): array
@@ -98,6 +146,12 @@ class Merger
 
         if ($kind === 'function') {
             return 'function::' . ($meta['fqcn'] ?? $meta['name'] ?? '');
+        }
+
+        // A documentation section is identified by where it is, never by its heading:
+        // a hundred pages have an "Example" section and none overrides another.
+        if ($kind === 'doc') {
+            return 'doc::' . ($chunk['id'] ?? '');
         }
 
         // class / interface / trait / enum header

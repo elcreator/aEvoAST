@@ -2,15 +2,29 @@
 
 namespace Elcreator\aEvoAST\Embeddings;
 
-class OllamaEmbedder
+class OllamaEmbedder implements Embedder
 {
     private string $url;
     private string $model;
+    private int $dimensions;
 
     public function __construct(string $url, string $model)
     {
         $this->url = rtrim($url, '/');
         $this->model = $model;
+        // Sizes of the models we know; any other model reports its size on first use.
+        $this->dimensions = str_starts_with($model, 'nomic-embed-text') ? 768
+            : (str_starts_with($model, 'bge-m3') ? 1024 : 0);
+    }
+
+    public function getDriver(): string
+    {
+        return 'ollama';
+    }
+
+    public function isRemote(): bool
+    {
+        return !HostCheck::isPrivate($this->url);
     }
 
     /**
@@ -98,7 +112,12 @@ class OllamaEmbedder
             throw new \RuntimeException('Unexpected Ollama response: missing embeddings key');
         }
 
-        return $data['embeddings'];
+        $embeddings = $data['embeddings'];
+        if (isset($embeddings[0]) && is_array($embeddings[0])) {
+            $this->dimensions = count($embeddings[0]);
+        }
+
+        return $embeddings;
     }
 
     /**
@@ -119,7 +138,6 @@ class OllamaEmbedder
 
     public function getDimensions(): int
     {
-        // nomic-embed-text produces 768-dimensional vectors
-        return 768;
+        return $this->dimensions;
     }
 }
