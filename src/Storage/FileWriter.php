@@ -132,10 +132,15 @@ class FileWriter
 
     private function writeJson(string $path, array $data): void
     {
-        file_put_contents(
-            $path,
-            json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+        // A bare json_encode() returns false on bad UTF-8 (source files are not always clean), and
+        // file_put_contents(false) then silently leaves an empty file. Substitute, and never fail silently.
+        $json = json_encode(
+            $data,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR
         );
+        if ($json === false || file_put_contents($path, $json) === false) {
+            throw new \RuntimeException("Cannot write JSON to {$path}: " . json_last_error_msg());
+        }
     }
 
     /**

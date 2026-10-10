@@ -34,6 +34,14 @@ class FileWriterTest extends TestCase
         return $out;
     }
 
+    public function testSymbolsWithInvalidUtf8AreWrittenNotLeftEmpty(): void
+    {
+        (new FileWriter())->writeSymbols($this->file, [['name' => "Bad\xB1Name", 'doc' => 'ok']], 'json');
+
+        $this->assertGreaterThan(0, filesize($this->file));
+        $this->assertSame('ok', json_decode(file_get_contents($this->file), true)[0]['doc']);
+    }
+
     public function testRoundTrip(): void
     {
         $w = new FileWriter();
