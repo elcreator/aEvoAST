@@ -4,6 +4,8 @@ namespace Elcreator\aEvoAST\Embeddings;
 
 class OllamaEmbedder implements Embedder
 {
+    private const RETRIES = 3;
+
     private string $url;
     private string $model;
     private int $dimensions;
@@ -82,21 +84,30 @@ class OllamaEmbedder implements Embedder
         $payload = json_encode([
             'model' => $this->model,
             'input' => array_values($texts),
-        ]);
+        ], JSON_INVALID_UTF8_SUBSTITUTE);
 
-        $ch = curl_init("{$this->url}/api/embed");
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-            CURLOPT_TIMEOUT        => 120,
-        ]);
+        // A busy or CPU-only Ollama (a CI runner) can stall on a batch: try again before giving up.
+        for ($attempt = 0; ; $attempt++) {
+            $ch = curl_init("{$this->url}/api/embed");
+            curl_setopt_array($ch, [
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => $payload,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                CURLOPT_TIMEOUT        => 300,
+            ]);
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            $transient = $response === false || $httpCode === 408 || $httpCode === 429 || ($httpCode >= 500 && $httpCode !== 501);
+            if (!$transient || $attempt >= self::RETRIES) {
+                break;
+            }
+            sleep($attempt + 1);
+        }
 
         if ($response === false) {
             throw new \RuntimeException("Ollama request failed: {$error}");

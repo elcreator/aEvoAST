@@ -120,7 +120,7 @@ jobs:
         if: steps.plan.outputs.build == 'true'
         run: |
           set -euo pipefail
-          php bin/build-release.php --evolution=evolution --docs=docs --langs="$LANGS" --out=dist
+          php bin/build-release.php --evolution=evolution --docs=docs --langs="$LANGS" --out=dist --batch=8
           ls -l dist
 
       - name: Publish the release
